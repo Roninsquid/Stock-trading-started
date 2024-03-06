@@ -1,0 +1,85 @@
+import numpy as np
+import pandas as pd
+from alpha_vantage.timeseries import TimeSeries
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+
+# Fetch historical stock data
+def fetch_stock_data(symbol, api_key):
+    ts = TimeSeries(key=api_key, output_format='pandas')
+    data, meta_data = ts.get_daily(symbol=symbol, outputsize='full')
+    return data
+
+# Preprocess data and extract features
+def preprocess_data(data):
+    # Add features such as moving averages, RSI, MACD, etc.
+    # Here's a simplified example:
+    data['SMA_50'] = data['4. close'].rolling(window=50).mean()
+    data['SMA_200'] = data['4. close'].rolling(window=200).mean()
+    data['RSI'] = calculate_RSI(data['4. close'])
+    return data.dropna()
+
+# Calculate Relative Strength Index (RSI)
+def calculate_RSI(close_prices, window=14):
+    delta = close_prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    RS = gain / loss
+    return 100 - (100 / (1 + RS))
+
+# Train a machine learning model
+def train_model(X_train, y_train):
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    return model
+
+# Execute trading strategy
+def execute_strategy(model, X, stop_loss_percent):
+    predictions = model.predict(X)
+    return np.where(predictions == 1, 1, np.where(predictions == -1, -1, 0))  # Buy=1, Sell=-1, Hold=0
+
+# Main function
+def main():
+    symbol = 'AAPL'
+    api_key = 'YOUR_ALPHA_VANTAGE_API_KEY'
+    stop_loss_percent = 0.03  # 3% stop loss
+
+    # Fetch and preprocess data
+    data = fetch_stock_data(symbol, api_key)
+    data = preprocess_data(data)
+
+    # Define features and target variable
+    X = data[['SMA_50', 'SMA_200', 'RSI']]
+    y = np.where(data['4. close'].shift(-1) > data['4. close'], 1, -1)
+
+    # Split data into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Train the model
+    model = train_model(X_train, y_train)
+
+    # Execute strategy on test data
+    strategy_actions = execute_strategy(model, X_test, stop_loss_percent)
+
+    # Evaluate strategy performance
+    final_portfolio_value = evaluate_strategy_performance(data.iloc[-len(X_test):], strategy_actions, stop_loss_percent)
+    print("Final portfolio value:", final_portfolio_value)
+
+# Evaluate strategy performance
+def evaluate_strategy_performance(test_data, actions, stop_loss_percent):
+    initial_cash = 10000  # Starting cash balance
+    cash = initial_cash
+    shares = 0
+    for i in range(len(actions)):
+        if actions[i] == 1:  # Buy
+            shares_to_buy = cash // (test_data['4. close'].iloc[i] * (1 + stop_loss_percent))
+            shares += shares_to_buy
+            cash -= shares_to_buy * test_data['4. close'].iloc[i]
+        elif actions[i] == -1:  # Sell
+            cash += shares * test_data['4. close'].iloc[i]
+            shares = 0
+    return cash + shares * test_data['4. close'].iloc[-1]
+
+if __name__ == "__main__":
+    main()
